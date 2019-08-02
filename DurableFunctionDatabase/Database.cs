@@ -29,20 +29,52 @@ namespace DurableFunctionDatabase
         public static void Register(
             [EntityTrigger] IDurableEntityContext ctx)
         {
-            string currentValue = ctx.GetState<string>();
+            var workflow = new List<string> { "Batch Samples", "Tx Yeast", "PoolPrep", "Pick & Grow Colonies", "QC", "Tx Ecoli/Agro" };
+            int currentValue = 0;
+            try
+            {
+                currentValue = ctx.GetState<int>();
 
-            switch (ctx.OperationName)
+            }
+            catch
+            {
+
+            }
+
+            switch (ctx.OperationName.ToLowerInvariant())
             {
                 case "set":
-                    string operand = ctx.GetInput<string>();
-                    currentValue = operand;
+                    //int amount = ctx.GetInput<int>();
+                    if (currentValue < workflow.Count - 1)
+                    {
+                        currentValue += 1;
+                    }
                     ctx.SetState(currentValue);
-                    ctx.Return(currentValue);
+                    ctx.Return(workflow[currentValue]);
                     break;
+                //case "reset":
+                //    currentValue = 0;
+                //    ctx.SetState(currentValue);
+                //    break;
                 case "get":
-                    ctx.Return(currentValue);
+                    ctx.Return(workflow[currentValue]);
                     break;
             }
+
+            //string currentValue = ctx.GetState<string>();
+
+            //switch (ctx.OperationName)
+            //{
+            //    case "set":
+            //        string operand = ctx.GetInput<string>();
+            //        currentValue = operand;
+            //        ctx.SetState(currentValue);
+            //        ctx.Return(currentValue);
+            //        break;
+            //    case "get":
+            //        ctx.Return(currentValue);
+            //        break;
+            //}
         }
 
         [FunctionName("Database_GET_Orchestrator")]
