@@ -16,20 +16,40 @@ namespace DurableFunctionDatabase
         {
             public string Key { get; set; }
 
-            public string Value { get; set; }
+            public string Workflow { get; set; }
 
-            public WriteOperation(string key, string value)
+            public string Operation { get; set; }
+
+            public int Value { get; set; }
+
+            public WriteOperation(string key, string workflow, string operation, int value)
             {
                 Key = key;
+                Workflow = workflow;
+                Operation = operation;
                 Value = value;
             }
         }
 
-        [FunctionName("Register")]
-        public static void Register(
+        [FunctionName("Yeast")]
+        public static void Yeast(
             [EntityTrigger] IDurableEntityContext ctx)
         {
-            var workflow = new List<string> { "Batch Samples", "Tx Yeast", "PoolPrep", "Pick & Grow Colonies", "QC", "Tx Ecoli/Agro" };
+            var activities = new List<string> { "Batch Samples", "Tx Yeast", "PoolPrep", "Pick & Grow Colonies", "QC", "Tx Ecoli/Agro" };
+            Workflow(activities, ctx);
+        }
+
+        [FunctionName("Gateway")]
+        public static void Gateway(
+            [EntityTrigger] IDurableEntityContext ctx)
+        {
+            var activities = new List<string> { "Batch Samples", "Gateway RXN", "E.Coli Tx", "Pick & Grow Colonies", "Miniprep", "QC", "Tx Ecoli/Agro" };
+            Workflow(activities, ctx);
+        }
+
+        private static void Workflow(List<string> activities,
+            IDurableEntityContext ctx)
+        {
             int currentValue = 0;
             try
             {
@@ -43,75 +63,72 @@ namespace DurableFunctionDatabase
 
             switch (ctx.OperationName.ToLowerInvariant())
             {
-                case "set":
-                    //int amount = ctx.GetInput<int>();
-                    if (currentValue < workflow.Count - 1)
+                case "advance":
+
+                    if (currentValue < activities.Count - 1)
                     {
                         currentValue += 1;
                     }
                     ctx.SetState(currentValue);
-                    ctx.Return(workflow[currentValue]);
+                    ctx.Return(activities[currentValue]);
                     break;
-                //case "reset":
-                //    currentValue = 0;
-                //    ctx.SetState(currentValue);
-                //    break;
+                case "set":
+                    int value = ctx.GetInput<int>();
+                    if (value < activities.Count)
+                    {
+                        currentValue = value;
+                        ctx.SetState(currentValue);
+                    }
+                    break;
+                case "activities":
+                    ctx.Return(string.Join(";", activities));
+                    break;
                 case "get":
-                    ctx.Return(workflow[currentValue]);
+                    ctx.Return(activities[currentValue]);
                     break;
             }
-
-            //string currentValue = ctx.GetState<string>();
-
-            //switch (ctx.OperationName)
-            //{
-            //    case "set":
-            //        string operand = ctx.GetInput<string>();
-            //        currentValue = operand;
-            //        ctx.SetState(currentValue);
-            //        ctx.Return(currentValue);
-            //        break;
-            //    case "get":
-            //        ctx.Return(currentValue);
-            //        break;
-            //}
         }
 
-        [FunctionName("Database_GET_Orchestrator")]
+        [FunctionName("Workflow_GET_Orchestrator")]
         public static async Task<string> DatabaseGetOrchestratorAsync(
             [OrchestrationTrigger] IDurableOrchestrationContext context)
         {
-            var key = context.GetInput<string>();
+            var operation = context.GetInput<WriteOperation>();
 
-            EntityId id = new EntityId(nameof(Register), key);
+            //EntityId id = new EntityId(nameof(Workflow), operation.Key);
+            EntityId id = new EntityId(operation.Workflow, operation.Key);
 
-            return await context.CallEntityAsync<string>(id, "get");
+            return await context.CallEntityAsync<string>(id, operation.Operation);
         }
 
-        [FunctionName("Database_PUT_Orchestrator")]
+        [FunctionName("Workflow_PUT_Orchestrator")]
         public static async Task<string> DatabasePutOrchestratorAsync(
             [OrchestrationTrigger] IDurableOrchestrationContext context)
         {
             var operation = context.GetInput<WriteOperation>();
 
-            EntityId id = new EntityId(nameof(Register), operation.Key);
+            //EntityId id = new EntityId(nameof(Workflow), operation.Key);
+            EntityId id = new EntityId(operation.Workflow, operation.Key);
 
-            return await context.CallEntityAsync<string>(id, "set", operation.Value);
+            return await context.CallEntityAsync<string>(id, "advance", operation.Value);
         }
 
-        [FunctionName("Database_HttpStart")]
+        [FunctionName("Workflow_HttpStart")]
         public static async Task<HttpResponseMessage> HttpStart(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "put", Route = "Database/{key}")] HttpRequestMessage req,
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "put", Route = "Workflow/{workflow}/{operation}/{key}")] HttpRequestMessage req,
+            string workflow,
+            string operation,
             string key,
             [OrchestrationClient] IDurableOrchestrationClient starter,
             ILogger log)
         {
             string instanceId;
-
+            log.LogInformation(workflow);
             // GET request
             if (req.Method == HttpMethod.Get)
             {
-                instanceId = await starter.StartNewAsync("Database_GET_Orchestrator", key);
+                int value = 0;
+                instanceId = await starter.StartNewAsync("Workflow_GET_Orchestrator", new WriteOperation(key, workflow, operation, value));
                 log.LogInformation($"Started orchestration with ID = '{instanceId}'.");
                 return await starter.WaitForCompletionOrCreateCheckStatusResponseAsync(req, instanceId, System.TimeSpan.MaxValue);
             }
@@ -120,8 +137,8 @@ namespace DurableFunctionDatabase
             else if(req.Method == HttpMethod.Put)
             {
                 var content = req.Content;
-                string value = content.ReadAsStringAsync().Result;
-                instanceId = await starter.StartNewAsync("Database_PUT_Orchestrator", new WriteOperation(key, value));
+                int value = int.Parse(content.ReadAsStringAsync().Result);
+                instanceId = await starter.StartNewAsync("Workflow_PUT_Orchestrator", new WriteOperation(key, workflow, operation, value));
                 log.LogInformation($"Started orchestration with ID = '{instanceId}'.");
                 return await starter.WaitForCompletionOrCreateCheckStatusResponseAsync(req, instanceId, System.TimeSpan.MaxValue);
             }
